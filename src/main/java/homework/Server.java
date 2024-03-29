@@ -20,27 +20,11 @@ public class Server {
             while (true) {
                 try {
                     Socket clientSocket = serverSocket.accept();
-                    System.out.println("Подключился новый клиент: " + clientSocket);
-
-                    PrintWriter clientOut = new PrintWriter(clientSocket.getOutputStream(), true);
-                    clientOut.println("Подключение успешно. Пришлите свой идентификатор");
-
                     Scanner clientIn = new Scanner(clientSocket.getInputStream());
                     String clientId = clientIn.nextLine();
-                    System.out.println("Идентификатор клиента " + clientSocket + ": " + clientId);
-
-                    String allClients = clients.entrySet().stream()
-                            .map(it -> "id = " + it.getKey() + ", client = " + it.getValue().getClientSocket())
-                            .collect(Collectors.joining("\n"));
-                    clientOut.println("Список доступных клиентов: \n" + allClients);
-
-                    ClientHandler clientHandler = new ClientHandler(clientSocket, clients);
-                    new Thread(clientHandler).start();
-
-                    for (ClientHandler client : clients.values()) {
-                        client.send("Подключился новый клиент: " + clientSocket + ", id = " + clientId);
-                    }
+                    ClientHandler clientHandler = new ClientHandler(clientSocket, clientId, clients);
                     clients.put(clientId, clientHandler);
+                    new Thread(clientHandler).start();
                 } catch (IOException e) {
                     System.err.println("Произошла ошибка при взаимодействии с клиентом: " + e.getMessage());
                 }
@@ -49,17 +33,19 @@ public class Server {
             throw new RuntimeException("Не удалось начать прослушивать порт " + PORT, e);
         }
     }
-
 }
 
 class ClientHandler implements Runnable {
 
     private final Socket clientSocket;
+
+    private final String clientId;
     private final PrintWriter out;
     private final Map<String, ClientHandler> clients;
 
-    public ClientHandler(Socket clientSocket, Map<String, ClientHandler> clients) throws IOException {
+    public ClientHandler(Socket clientSocket, String clientId, Map<String, ClientHandler> clients) throws IOException {
         this.clientSocket = clientSocket;
+        this.clientId = clientId;
         this.out = new PrintWriter(clientSocket.getOutputStream(), true);
         this.clients = clients;
     }
@@ -70,48 +56,72 @@ class ClientHandler implements Runnable {
 
     @Override
     public void run() {
+        // Оповестить о подключении
+        System.out.println("Подключился новый клиент: " + clientId);
+        clients.values().stream()
+                .filter(it -> !it.equals(this))
+                .forEach(it -> it.send("Подключился новый клиент: " + clientId));
+        // Основной алгоритм
         try (Scanner in = new Scanner(clientSocket.getInputStream())) {
-            while (true) {
-                if (clientSocket.isClosed()) {
-                    System.out.println("Клиент " + clientSocket + "отключился");
-                    break;
-                }
-
+            boolean isRunning = true;
+            while (isRunning) {
                 String input = in.nextLine();
-                System.out.println("Получено сообщение от клиента " + clientSocket + ": " + input);
-
-                String toClientId = null;
                 if (input.startsWith("@")) {
+                    String toClientId = null;
                     String[] parts = input.split("\\s+");
                     if (parts.length > 0) {
                         toClientId = parts[0].substring(1);
                     }
-                }
-
-                if (toClientId == null) {
-                    clients.values().forEach(it -> it.send(input));
-                } else {
-                    ClientHandler toClient = clients.get(toClientId);
-                    if (toClient != null) {
-                        toClient.send(input.replace("@" + toClientId + " ", ""));
-                    } else {
-                        System.err.println("Не найден клиент с идентфиикатором: " + toClientId);
+                    if (toClientId != null) {
+                        ClientHandler toClient = null;
+                        for (String id: clients.keySet()) {
+                            if (id.startsWith(toClientId)) {
+                                toClient = clients.get(id);
+                            }
+                        }
+                        if (toClient != null) {
+                            toClient.send(clientId + ": " + input.replace("@" + toClientId + " ", ""));
+                        } else {
+                            this.send("Не найден клиент: " + toClientId);
+                        }
                     }
+                } else if (input.startsWith("/")) {
+                    switch (input.substring(1)) {
+                        case "exit":
+                            isRunning = false;
+                            break;
+                        case "all":
+                            this.send(clients
+                                    .entrySet()
+                                    .stream()
+                                    .filter(it -> !it.getKey().equals(clientId))
+                                    .map(it -> it.getKey())
+                                    .collect(Collectors.joining("\n"))
+                            );
+                            break;
+                    }
+                } else {
+                    System.out.println(clientId + ": " + input);
+                    clients
+                            .values()
+                            .stream().filter(it -> !it.equals(this))
+                            .forEach(it -> it.send(clientId + ": " + input));
                 }
-
-                out.println("Cообщение [" + input + "] получено");
-                if (Objects.equals("exit", input)) {
-                    System.out.println("Клиент отключился");
-                    break;
+                if (clientSocket.isClosed()) {
+                    isRunning = false;
                 }
             }
         } catch (IOException e) {
             System.err.println("Произошла ошибка при взаимодействии с клиентом " + clientSocket + ": " + e.getMessage());
         }
-
-        // FIXME: При отключении клиента нужно удалять его из Map и оповещать остальных
+        // Отключение клиента
         try {
             clientSocket.close();
+            System.out.println("Клиент " + clientId + " отключился");
+            clients.values().stream()
+                    .filter(it -> !it.equals(this))
+                    .forEach(it -> it.send("Клиент отключился: " + clientId));
+            clients.remove(clientId);
         } catch (IOException e) {
             System.err.println("Ошибка при отключении клиента " + clientSocket + ": " + e.getMessage());
         }

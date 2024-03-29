@@ -13,15 +13,7 @@ public class Client {
         try {
             Socket serverSocket = new Socket("localhost", Server.PORT);
             System.out.println("Подключились к серверу: tcp://localhost:" + Server.PORT);
-
-            // Читаем с сервера приветственное сообщение
-            Scanner serverIn = new Scanner(serverSocket.getInputStream());
-            String input = serverIn.nextLine();
-            System.out.println("Сообщение от сервера: " + input);
-
-            // Отправили идентфиикатор на сервер
             new PrintWriter(serverSocket.getOutputStream(), true).println(UUID.randomUUID());
-
             new Thread(new ServerReader(serverSocket)).start();
             new Thread(new ServerWriter(serverSocket)).start();
         } catch (IOException e) {
@@ -42,22 +34,18 @@ class ServerWriter implements Runnable {
     public void run() {
         Scanner consoleReader = new Scanner(System.in);
         try (PrintWriter out = new PrintWriter(serverSocket.getOutputStream(), true)) {
-            while (true) {
+            boolean isRunning = true;
+            while (isRunning) {
                 String msgFromConsole = consoleReader.nextLine();
                 out.println(msgFromConsole);
-
-                // uuid msg
-
-                if (Objects.equals("exit", msgFromConsole)) {
+                if (msgFromConsole.equals("/exit")) {
                     System.out.println("Отключаемся...");
-                    break;
+                    isRunning = false;
                 }
             }
         } catch (IOException e) {
             System.err.println("Ошибка при отправке на сервер: " + e.getMessage());
         }
-
-
         try {
             serverSocket.close();
         } catch (IOException e) {
@@ -79,12 +67,11 @@ class ServerReader implements Runnable {
         try (Scanner in = new Scanner(serverSocket.getInputStream())) {
             while (in.hasNext()) {
                 String input = in.nextLine();
-                System.out.println("Сообщение от сервера: " + input);
+                System.out.println(input);
             }
         } catch (IOException e) {
             System.err.println("Ошибка при отключении чтении с сервера: " + e.getMessage());
         }
-
         try {
             serverSocket.close();
         } catch (IOException e) {
